@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+          - name: Linux
+            os: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar dependencias (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxext-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libfreetype-dev libfontconfig1-dev \
+            libgl1-mesa-dev libcurl4-openssl-dev
+
+      - name: Configurar
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DTLC_COPY_AFTER_BUILD=OFF
+
+      - name: Compilar
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Subir artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: TransientLockComp-${{ matrix.name }}
+          path: build/TransientLockComp_artefacts/Release
+          if-no-files-found: error
