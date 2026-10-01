@@ -1,49 +1,61 @@
-# TransientLock Comp
+# TransientLock Comp v1.1
 
-Compresor con protección de transientes (VST3 / AU / AAX / Standalone) hecho con JUCE 8 y C++17.
+Compresor con proteccion de transientes (VST3 / AU / AAX / Standalone) hecho con JUCE 8 y C++17.
 
 ## Compilar
 
-Requisitos: CMake ≥ 3.22, compilador C++17 y conexión a internet (CMake descarga JUCE 8.0.6 automáticamente).
+Requisitos: CMake >= 3.22, compilador C++17 e internet (CMake descarga JUCE 8.0.6).
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j
 ```
 
-- **Windows:** Visual Studio 2022. Los `.vst3` quedan en `build/TransientLockComp_artefacts/Release/VST3`
-  (y se copian a `C:\Program Files\Common Files\VST3`; ejecuta la terminal como administrador o desactiva
-  `COPY_PLUGIN_AFTER_BUILD`).
-- **macOS:** Xcode. Se generan VST3 + AU (universal arm64/x86_64).
-- **Linux:** instala antes las dependencias de JUCE:
-  `sudo apt install libasound2-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`
-- **AAX:** descarga el AAX SDK de Avid y añade `-DAAX_SDK_PATH=/ruta/AAX_SDK`.
-  Para usarlo en Pro Tools release necesitas firmarlo con PACE/iLok.
+- **Windows:** Visual Studio 2022. Salida en `build/TransientLockComp_artefacts/Release/VST3`.
+  Por defecto copia el plugin a `C:\Program Files\Common Files\VST3` (usa `-DTLC_COPY_AFTER_BUILD=OFF` para evitarlo).
+- **macOS:** Xcode. VST3 + AU (universal arm64/x86_64).
+- **Linux:** `sudo apt install libasound2-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`
+- **AAX:** `-DAAX_SDK_PATH=/ruta/AAX_SDK` (SDK de Avid). Para Pro Tools release hace falta firma PACE/iLok.
 
 Antes de distribuir cambia `COMPANY_NAME`, `PLUGIN_MANUFACTURER_CODE` y `BUNDLE_ID` en `CMakeLists.txt`.
 
-## Cómo funciona
+## GitHub Actions
 
-La separación transient/sustain se hace en el **dominio de ganancia**, no con filtros:
+`.github/workflows/build.yml` compila en Windows, macOS y Linux, firma ad-hoc en macOS,
+valida el VST3 con **pluginval** (strictness 5) y sube los artefactos. Si haces push de un tag
+`vX.Y.Z` (ej. `git tag v1.1.0 && git push --tags`) crea ademas un **GitHub Release** con los binarios.
 
-1. `TransientDetector`: envolvente rápida (0.5 / 10 ms) vs. lenta (30 / 200 ms). La diferencia en dB,
-   pasada por un smoothstep (2.5 → 9 dB), da `t` en 0..1 (nivel-independiente, con gate a -80 dBFS).
-2. Compresor feed-forward en dB con soft-knee y ballistics attack/release; detección stereo-linked.
-3. Reducción aplicada = `GR × BodyCompression × (1 − Protection × t)`.
-   Además el detector del compresor se baja hasta 6 dB durante el transiente para evitar
-   que el compresor "cargue" con el golpe y provoque un tirón posterior.
-4. Con Protection > 75 % se añade un realce de hasta +2 dB sobre el transiente.
-5. Mix paralelo, Makeup, Output y Bypass con rampas de 10–20 ms (sin clicks).
+### Firma de codigo (opcional, para distribuir)
+- **Windows:** firma los `.vst3` con `signtool` y un certificado de code signing (guardalo en Secrets).
+- **macOS:** firma con tu "Developer ID Application" y notariza con `xcrun notarytool`
+  (Apple Developer Program, 99 USD/ano). Sin esto, el usuario debe ejecutar `xattr -cr`.
 
-Latencia: **0 muestras** (no hay crossover ni lookahead). Sin fase ni smearing porque nunca se suman bandas.
+## Controles
+
+| Control | Funcion |
+|---|---|
+| Threshold / Ratio / Knee | Curva del compresor |
+| Attack / Release | Ballistics |
+| **Transient Protection** | Cuanto se protege el ataque (>75 % anade hasta +2 dB de realce) |
+| Body Compression | Cantidad de compresion sobre el cuerpo |
+| SC HPF | Filtro pasa-altos 2o orden en el detector (20 Hz = off) |
+| Sensitivity | Sensibilidad del detector de transientes |
+| Input / Makeup / Mix / Output | Ganancias y compresion paralela |
+| Oversampling | Off / 2x / 4x (FIR linear-phase; reporta latencia al DAW) |
+| Presets | 10 presets de fabrica (voz, bateria, bajo, guitarra, bus...) |
+
+La ventana es redimensionable (se recuerda el tamano en el estado del plugin).
+
+## Como funciona
+
+La separacion transient/sustain se hace en el **dominio de ganancia**:
+
+1. Detector diferencial: envolvente rapida (0.5/10 ms) vs lenta (30/200 ms) -> `t` en 0..1 (smoothstep).
+2. Compresor feed-forward en dB con soft-knee (detector stereo-linked, con HPF opcional).
+3. Reduccion aplicada = `GR x BodyCompression x (1 - Protection x t)`.
+4. El detector del compresor baja hasta 6 dB durante el transiente (evita tirones posteriores).
+
+Latencia: 0 muestras con Oversampling Off; con 2x/4x se reporta la del oversampler.
 
 ## Medidores
-
-- **BODY:** reducción que sufre el cuerpo (sin protección).
-- **APPLIED:** reducción realmente aplicada (la diferencia con BODY es lo que protege el transiente).
-- **TRANS:** actividad del detector.
-
-## Ideas para siguiente versión
-
-Sidechain HPF, oversampling opcional para attacks < 1 ms, lookahead opcional, sensibilidad del detector,
-presets y GUI escalable.
+**BODY** (reduccion del cuerpo), **APPLIED** (reduccion real aplicada), **TRANS** (actividad del detector).
