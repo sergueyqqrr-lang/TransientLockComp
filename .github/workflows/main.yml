@@ -22,6 +22,9 @@ jobs:
           - name: Linux
             os: ubuntu-latest
 
+    env:
+      ARTEFACTS: build/TransientLockComp_artefacts/Release
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,7 +35,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libx11-dev libxext-dev libxrandr-dev \
             libxinerama-dev libxcursor-dev libfreetype-dev libfontconfig1-dev \
-            libgl1-mesa-dev libcurl4-openssl-dev
+            libgl1-mesa-dev libcurl4-openssl-dev xvfb
 
       - name: Configurar
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DTLC_COPY_AFTER_BUILD=OFF
@@ -40,9 +43,101 @@ jobs:
       - name: Compilar
         run: cmake --build build --config Release --parallel 4
 
-      - name: Subir artefactos
+      # ---------------------------------------------------------- Firma ad-hoc (macOS)
+      - name: Firma ad-hoc (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cd "$ARTEFACTS"
+          for f in VST3/*.vst3 AU/*.component Standalone/*.app; do
+            if [ -e "$f" ]; then codesign --force --deep -s - "$f"; fi
+          done
+
+      # ---------------------------------------------------------- pluginval
+      - name: Validar con pluginval (Linux)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        shell: bash
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+          unzip -q pluginval.zip && chmod +x pluginval
+          for f in "$ARTEFACTS"/VST3/*.vst3; do
+            xvfb-run -a ./pluginval --strictness-level 5 --validate-in-process --skip-gui-tests "$f"
+          done
+
+      - name: Validar con pluginval (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        shell: bash
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          for f in "$ARTEFACTS"/VST3/*.vst3; do
+            ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate-in-process --skip-gui-tests "$f"
+          done
+
+      - name: Validar con pluginval (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          7z x pluginval.zip -y > /dev/null
+          for f in "$ARTEFACTS"/VST3/*.vst3; do
+            ./pluginval.exe --strictness-level 5 --validate-in-process --skip-gui-tests "$f"
+          done
+
+      # ---------------------------------------------------------- Artefactos
+      # En macOS/Linux se empaqueta en tar.gz para conservar permisos de ejecucion.
+      - name: Empaquetar (macOS/Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: tar -czf "TransientLockComp-${{ matrix.name }}.tar.gz" -C "$ARTEFACTS" .
+
+      - name: Subir artefactos (macOS/Linux)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TransientLockComp-${{ matrix.name }}
+          path: TransientLockComp-${{ matrix.name }}.tar.gz
+          if-no-files-found: error
+
+      - name: Subir artefactos (Windows)
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: TransientLockComp-${{ matrix.name }}
           path: build/TransientLockComp_artefacts/Release
           if-no-files-found: error
+
+  # ------------------------------------------------------------ Release en tags vX.Y.Z
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Empaquetar release
+        shell: bash
+        run: |
+          cd dist
+          for d in */; do
+            n="${d%/}"
+            if ls "$d"*.tar.gz >/dev/null 2>&1; then
+              mv "$d"*.tar.gz "$n.tar.gz"
+            else
+              (cd "$d" && zip -qr "../$n.zip" .)
+            fi
+          done
+          ls -la
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
